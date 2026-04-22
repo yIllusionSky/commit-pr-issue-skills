@@ -1,6 +1,6 @@
 ---
-name: commit-pr-skills
-description: commit、PR、issue 提交规范技能，生成提交内容时使用
+name: commit-pr-issue-skills
+description: commit、PR、issue 提交规范技能，生成相关内容时使用
 ---
 
 # 提交规范
