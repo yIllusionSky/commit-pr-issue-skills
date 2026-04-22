@@ -6,7 +6,7 @@
 [optional footer(s)]
 
 
-## 各功能详解
+## Reference
 type: feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert
 scope: ()
 description: A short, imperative summary of the change

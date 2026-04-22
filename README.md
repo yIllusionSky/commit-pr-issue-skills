@@ -1,4 +1,4 @@
-# commit-pr-issue-skills
+# commit-pr-issue-skill
 
 一个用于统一生成 `commit`、Pull Request 和 Issue 内容的技能包。
 

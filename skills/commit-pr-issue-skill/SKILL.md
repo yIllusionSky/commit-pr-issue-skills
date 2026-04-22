@@ -1,5 +1,5 @@
 ---
-name: commit-pr-issue-skills
+name: commit-pr-issue-skill
 description: commit、PR、issue 提交规范技能，生成相关内容时使用
 ---
 
