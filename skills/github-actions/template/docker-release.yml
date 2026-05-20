@@ -1,0 +1,170 @@
+name: Docker
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: ${{ github.event.repository.name }}
+
+jobs:
+  docker:
+    name: Package Docker release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Prepare release metadata
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vX.Y.Z: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md")
+          if not changelog.exists():
+              raise SystemExit("CHANGELOG.md not found")
+
+          text = changelog.read_text(encoding="utf-8")
+          heading = re.compile(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}\s*$", re.MULTILINE)
+          match = heading.search(text)
+          if not match:
+              raise SystemExit(f"CHANGELOG version section not found: [{version}]")
+
+          next_heading = re.search(r"^## \[.+?\]", text[match.end():], re.MULTILINE)
+          end = match.end() + next_heading.start() if next_heading else len(text)
+          notes = text[match.end():end].strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG version section is empty: [{version}]")
+
+          Path("RELEASE_NOTES.md").write_text(notes + "\n", encoding="utf-8")
+          PY
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: extractions/setup-just@v4
+
+      - name: Resolve image metadata
+        id: meta
+        shell: bash
+        run: |
+          eval "$(just update-version)"
+
+          if [ -z "${BACKEND_IMAGE:-}" ] || [ -z "${BACKEND_TAG:-}" ]; then
+            echo "BACKEND_IMAGE and BACKEND_TAG are required."
+            exit 1
+          fi
+
+          if [ "${BACKEND_TAG}" != "${VERSION}" ]; then
+            echo "BACKEND_TAG must match release version: ${BACKEND_TAG} != ${VERSION}"
+            exit 1
+          fi
+
+          echo "backend_image=${BACKEND_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "backend_tag=${BACKEND_TAG}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${FRONTEND_IMAGE:-}" ] && [ -n "${FRONTEND_TAG:-}" ]; then
+            if [ "${FRONTEND_TAG}" != "${VERSION}" ]; then
+              echo "FRONTEND_TAG must match release version: ${FRONTEND_TAG} != ${VERSION}"
+              exit 1
+            fi
+
+            echo "has_frontend=true" >> "$GITHUB_OUTPUT"
+            echo "frontend_image=${FRONTEND_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "frontend_tag=${FRONTEND_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./dockerfile/Dockerfile.rust
+          push: false
+          tags: ${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.backend_tag }}
+          build-args: |
+            APP_BIN=${{ steps.meta.outputs.backend_image }}
+          load: true
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build frontend image
+        if: steps.meta.outputs.has_frontend == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./dockerfile/Dockerfile.sveltekit
+          push: false
+          tags: ${{ steps.meta.outputs.frontend_image }}:${{ steps.meta.outputs.frontend_tag }}
+          load: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: Create release package
+        shell: bash
+        run: |
+          mkdir -p release/deploy
+
+          if [ "${{ steps.meta.outputs.has_frontend }}" = "true" ]; then
+            docker save -o release/deploy/docker.tar \
+              "${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.backend_tag }}" \
+              "${{ steps.meta.outputs.frontend_image }}:${{ steps.meta.outputs.frontend_tag }}"
+          else
+            docker save -o release/deploy/docker.tar \
+              "${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.backend_tag }}"
+          fi
+
+          cp docker-compose.yaml release/deploy/
+          [ -f .env.example ] && cp .env.example release/deploy/
+
+          for dir in config conf pingap; do
+            [ -d "$dir" ] || continue
+            find "$dir" -type f \( -name '*.example' -o -name '*.example.*' -o -name 'example.*' \) -print | while IFS= read -r file; do
+              mkdir -p "release/deploy/$(dirname "$file")"
+              cp "$file" "release/deploy/$file"
+            done
+          done
+
+          forbidden="$(find release/deploy -type f \( -name '.env' -o -name '.env.local' -o -name '*.key' -o -name '*.pem' -o -name '*.p12' -o -name '*.crt' \) -print -quit)"
+          if [ -n "$forbidden" ]; then
+            echo "Forbidden private file in release package: $forbidden"
+            exit 1
+          fi
+
+          tar -czf "release/$PROJECT_NAME-$VERSION.tar.gz" -C release/deploy .
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: release/${{ env.PROJECT_NAME }}-${{ env.VERSION }}.tar.gz
+          fail_on_unmatched_files: true

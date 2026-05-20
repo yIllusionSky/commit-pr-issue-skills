@@ -1,0 +1,125 @@
+name: Tauri
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE_MANAGER: bun
+  INSTALL_COMMAND: bun install --frozen-lockfile
+  TAURI_SCRIPT: bun tauri
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vX.Y.Z: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md")
+          if not changelog.exists():
+              raise SystemExit("CHANGELOG.md not found")
+
+          text = changelog.read_text(encoding="utf-8")
+          heading = re.compile(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}\s*$", re.MULTILINE)
+          match = heading.search(text)
+          if not match:
+              raise SystemExit(f"CHANGELOG version section not found: [{version}]")
+
+          next_heading = re.search(r"^## \[.+?\]", text[match.end():], re.MULTILINE)
+          end = match.end() + next_heading.start() if next_heading else len(text)
+          notes = text[match.end():end].strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG version section is empty: [{version}]")
+
+          Path("RELEASE_NOTES.md").write_text(notes + "\n", encoding="utf-8")
+          PY
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: true
+          prerelease: false
+
+  desktop:
+    needs: create-release
+    name: Tauri Desktop ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-aarch64
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: macos-x86_64
+            platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: linux-x86_64
+            platform: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+          - name: windows-x86_64
+            platform: windows-latest
+            args: ""
+            rust-targets: ""
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install dependencies
+        run: ${{ env.INSTALL_COMMAND }}
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          tauriScript: ${{ env.TAURI_SCRIPT }}
+          args: ${{ matrix.args }}

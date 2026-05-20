@@ -1,0 +1,100 @@
+name: App
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: ${{ github.event.repository.name }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vX.Y.Z: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md")
+          if not changelog.exists():
+              raise SystemExit("CHANGELOG.md not found")
+
+          text = changelog.read_text(encoding="utf-8")
+          heading = re.compile(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}\s*$", re.MULTILINE)
+          match = heading.search(text)
+          if not match:
+              raise SystemExit(f"CHANGELOG version section not found: [{version}]")
+
+          next_heading = re.search(r"^## \[.+?\]", text[match.end():], re.MULTILINE)
+          end = match.end() + next_heading.start() if next_heading else len(text)
+          notes = text[match.end():end].strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG version section is empty: [{version}]")
+
+          Path("RELEASE_NOTES.md").write_text(notes + "\n", encoding="utf-8")
+          PY
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+
+  upload-assets:
+    needs: create-release
+    name: App ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: ${{ env.APP_NAME }}
+          target: ${{ matrix.target }}
+          archive: ${{ env.APP_NAME }}-${{ matrix.target }}
+          tar: unix
+          zip: windows
+          token: ${{ secrets.GITHUB_TOKEN }}

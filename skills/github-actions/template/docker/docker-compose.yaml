@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: ./dockerfile/Dockerfile.rust
+    image: ${BACKEND_IMAGE}:${BACKEND_TAG}
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT}:8080"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./dockerfile/Dockerfile.sveltekit
+    image: ${FRONTEND_IMAGE}:${FRONTEND_TAG}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT}:3000"
+
+  pingap:
+    image: vicanso/pingap:latest
+    container_name: pingap-instance
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./pingap_data:/opt/pingap
+      - ./pingap/conf/example.conf:/opt/pingap/conf/pingap.conf:ro
+    environment:
+      PINGAP_CONF: ${PINGAP_CONF}
+      PINGAP_ADMIN_ADDR: ${PINGAP_ADMIN_ADDR}
+      PINGAP_ADMIN_USER: ${PINGAP_ADMIN_USER}
+      PINGAP_ADMIN_PASSWORD: ${PINGAP_ADMIN_PASSWORD}
+    command:
+      - pingap
+      - --autoreload

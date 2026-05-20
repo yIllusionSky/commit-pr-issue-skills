@@ -1,0 +1,5 @@
+update-version:
+    @echo "export BACKEND_IMAGE=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')"
+    @echo "export BACKEND_TAG=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+    @if [ -f package.json ]; then echo "export FRONTEND_IMAGE=$(bun pm pkg get name 2>/dev/null | tr -d '\"')"; fi
+    @if [ -f package.json ]; then echo "export FRONTEND_TAG=$(bun pm pkg get version 2>/dev/null | tr -d '\"')"; fi
