@@ -1,8 +1,8 @@
 services:
   backend:
     build:
-      context: .
-      dockerfile: ./dockerfile/Dockerfile.rust
+      context: ./backend
+      dockerfile: ../dockerfile/Dockerfile.rust
     image: ${BACKEND_IMAGE}:${BACKEND_TAG}
     restart: unless-stopped
     ports:
@@ -10,8 +10,8 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: ./dockerfile/Dockerfile.sveltekit
+      context: ./frontend
+      dockerfile: ../dockerfile/Dockerfile.sveltekit
     image: ${FRONTEND_IMAGE}:${FRONTEND_TAG}
     restart: unless-stopped
     depends_on:

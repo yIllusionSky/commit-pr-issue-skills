@@ -106,9 +106,10 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./backend
           file: ./dockerfile/Dockerfile.rust
           push: false
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.backend_image }}:${{ steps.meta.outputs.backend_tag }}
           build-args: |
             APP_BIN=${{ steps.meta.outputs.backend_image }}
@@ -120,9 +121,10 @@ jobs:
         if: steps.meta.outputs.has_frontend == 'true'
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./frontend
           file: ./dockerfile/Dockerfile.sveltekit
           push: false
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.frontend_image }}:${{ steps.meta.outputs.frontend_tag }}
           load: true
           cache-from: type=gha,scope=frontend
